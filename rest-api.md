@@ -15,9 +15,11 @@
 - [SIGNED (TRADE and USER_DATA) Endpoint security](#signed-trade-and-user_data-endpoint-security)
   - [Timing security](#timing-security)
   - [SIGNED Endpoint Examples for POST /api/v3/order](#signed-endpoint-examples-for-post-apiv3order)
-    - [Example 1: As a request body](#example-1-as-a-request-body)
-    - [Example 2: As a query string](#example-2-as-a-query-string)
-    - [Example 3: Mixed query string and request body](#example-3-mixed-query-string-and-request-body)
+    - [HMAC Keys](#hmac-keys)
+      - [Example 1: As a request body](#example-1-as-a-request-body)
+      - [Example 2: As a query string](#example-2-as-a-query-string)
+      - [Example 3: Mixed query string and request body](#example-3-mixed-query-string-and-request-body)
+    - [RSA Keys](#rsa-keys)
 - [Public API Endpoints](#public-api-endpoints)
     - [Terminology](#terminology)
   - [ENUM definitions](#enum-definitions)
@@ -31,16 +33,19 @@
     - [Old trade lookup (MARKET_DATA)](#old-trade-lookup-market_data)
     - [Compressed/Aggregate trades list](#compressedaggregate-trades-list)
     - [Kline/Candlestick data](#klinecandlestick-data)
+    - [UIKlines](#uiklines)
     - [Current average price](#current-average-price)
     - [24hr ticker price change statistics](#24hr-ticker-price-change-statistics)
     - [Symbol price ticker](#symbol-price-ticker)
     - [Symbol order book ticker](#symbol-order-book-ticker)
+    - [Rolling window price change statistics](#rolling-window-price-change-statistics)
   - [Account endpoints](#account-endpoints)
     - [New order  (TRADE)](#new-order--trade)
     - [Test new order (TRADE)](#test-new-order-trade)
     - [Query order (USER_DATA)](#query-order-user_data)
     - [Cancel order (TRADE)](#cancel-order-trade)
     - [Cancel All Open Orders on a Symbol (TRADE)](#cancel-all-open-orders-on-a-symbol-trade)
+    - [Cancel an Existing Order and Send a New Order (TRADE)](#cancel-an-existing-order-and-send-a-new-order-trade)
     - [Current open orders (USER_DATA)](#current-open-orders-user_data)
     - [All orders (USER_DATA)](#all-orders-user_data)
     - [New OCO (TRADE)](#new-oco-trade)
@@ -55,45 +60,45 @@
     - [Start user data stream (USER_STREAM)](#start-user-data-stream-user_stream)
     - [Keepalive user data stream (USER_STREAM)](#keepalive-user-data-stream-user_stream)
     - [Close user data stream (USER_STREAM)](#close-user-data-stream-user_stream)
-- [Filters](#filters)
-  - [Symbol filters](#symbol-filters)
-    - [PRICE_FILTER](#price_filter)
-    - [PERCENT_PRICE](#percent_price)
-    - [LOT_SIZE](#lot_size)
-    - [MIN_NOTIONAL](#min_notional)
-    - [ICEBERG_PARTS](#iceberg_parts)
-    - [MARKET_LOT_SIZE](#market_lot_size)
-    - [MAX_NUM_ORDERS](#max_num_orders)
-    - [MAX_NUM_ALGO_ORDERS](#max_num_algo_orders)
-    - [MAX_NUM_ICEBERG_ORDERS](#max_num_iceberg_orders)
-    - [MAX_POSITION](#max_position)
-  - [Exchange Filters](#exchange-filters)
-    - [EXCHANGE_MAX_NUM_ORDERS](#exchange_max_num_orders)
-    - [EXCHANGE_MAX_NUM_ALGO_ORDERS](#exchange_max_num_algo_orders)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
-# Public Rest API for Binance (2021-08-12)
+# Public Rest API for Binance (2023-01-23)
 
 ## General API Information
-* The base endpoint is: **https://api.binance.com**
-* If there are performance issues with the endpoint above, these API clusters are also available:
+* The following base endpoints are available:
+  * **https://api.binance.com**
   * **https://api1.binance.com**
   * **https://api2.binance.com**
   * **https://api3.binance.com**
+  * **https://api4.binance.com**
+* All endpoints are equal in functionality.<br/> Performance may vary between the base endpoints and can be freely switched between them to find which one works best for one's setup.
 * All endpoints return either a JSON object or array.
 * Data is returned in **ascending** order. Oldest first, newest last.
 * All time and timestamp related fields are in **milliseconds**.
+* The base endpoint **https://data.binance.com** can be used to access the following API endpoints that have `NONE` as security type:
+  * GET /api/v3/aggTrades
+  * GET /api/v3/avgPrice
+  * GET /api/v3/depth
+  * GET /api/v3/exchangeInfo
+  * GET /api/v3/klines
+  * GET /api/v3/ping
+  * GET /api/v3/ticker
+  * GET /api/v3/ticker/24hr
+  * GET /api/v3/ticker/bookTicker
+  * GET /api/v3/ticker/price
+  * GET /api/v3/time
+  * GET /api/v3/trades
+  * GET /api/v3/uiKlines
 
 ## HTTP Return Codes
 
-* HTTP `4XX` return codes are used for malformed requests;
-  the issue is on the sender's side.
+* HTTP `4XX` return codes are used for malformed requests; the issue is on the sender's side.
 * HTTP `403` return code is used when the WAF Limit (Web Application Firewall) has been violated.
+* HTTP `409` return code is used when a cancelReplace order partially succeeds. (i.e. if the cancellation of the order fails but the new order placement succeeds.)
 * HTTP `429` return code is used when breaking a request rate limit.
 * HTTP `418` return code is used when an IP has been auto-banned for continuing to send requests after receiving `429` codes.
-* HTTP `5XX` return codes are used for internal errors; the issue is on
-  Binance's side.
+* HTTP `5XX` return codes are used for internal errors; the issue is on Binance's side.
   It is important to **NOT** treat this as a failure operation; the execution status is
   **UNKNOWN** and could have been a success.
 
@@ -163,7 +168,7 @@ This means that the endpoint will check the first Data Source, and if it cannot 
 # Endpoint security type
 * Each endpoint has a security type that determines how you will
   interact with it. This is stated next to the NAME of the endpoint.
-    * If no security type is stated, assume the security type is NONE.
+* If no security type is stated, assume the security type is NONE.
 * API-keys are passed into the Rest API via the `X-MBX-APIKEY`
   header.
 * API-keys and secret-keys **are case sensitive**.
@@ -199,6 +204,7 @@ MARKET_DATA | Endpoint requires sending a valid API-Key.
   milliseconds after `timestamp` the request is valid for. If `recvWindow`
   is not sent, **it defaults to 5000**.
 * The logic is as follows:
+
   ```javascript
   if (timestamp < (serverTime + 1000) && (serverTime - timestamp) <= recvWindow) {
     // process request
@@ -218,6 +224,8 @@ server.
 
 
 ## SIGNED Endpoint Examples for POST /api/v3/order
+
+### HMAC Keys
 Here is a step-by-step example of how to send a valid signed payload from the
 Linux command line using `echo`, `openssl`, and `curl`.
 
@@ -238,7 +246,7 @@ price | 0.1
 recvWindow | 5000
 timestamp | 1499827319559
 
-### Example 1: As a request body
+#### Example 1: As a request body
 * **requestBody:** symbol=LTCBTC&side=BUY&type=LIMIT&timeInForce=GTC&quantity=1&price=0.1&recvWindow=5000&timestamp=1499827319559
 * **HMAC SHA256 signature:**
 
@@ -255,7 +263,7 @@ timestamp | 1499827319559
     [linux]$ curl -H "X-MBX-APIKEY: vmPUZE6mv9SD5VNHk4HlWFsOr6aKE2zvsw0MuIgwCIPy6utIco14y7Ju91duEh8A" -X POST 'https://api.binance.com/api/v3/order' -d 'symbol=LTCBTC&side=BUY&type=LIMIT&timeInForce=GTC&quantity=1&price=0.1&recvWindow=5000&timestamp=1499827319559&signature=c8db56825ae71d6d79447849e617115f4a920fa2acdcab2b053c4b2838bd6b71'
     ```
 
-### Example 2: As a query string
+#### Example 2: As a query string
 * **queryString:** symbol=LTCBTC&side=BUY&type=LIMIT&timeInForce=GTC&quantity=1&price=0.1&recvWindow=5000&timestamp=1499827319559
 * **HMAC SHA256 signature:**
 
@@ -272,7 +280,7 @@ timestamp | 1499827319559
     [linux]$ curl -H "X-MBX-APIKEY: vmPUZE6mv9SD5VNHk4HlWFsOr6aKE2zvsw0MuIgwCIPy6utIco14y7Ju91duEh8A" -X POST 'https://api.binance.com/api/v3/order?symbol=LTCBTC&side=BUY&type=LIMIT&timeInForce=GTC&quantity=1&price=0.1&recvWindow=5000&timestamp=1499827319559&signature=c8db56825ae71d6d79447849e617115f4a920fa2acdcab2b053c4b2838bd6b71'
     ```
 
-### Example 3: Mixed query string and request body
+#### Example 3: Mixed query string and request body
 * **queryString:** symbol=LTCBTC&side=BUY&type=LIMIT&timeInForce=GTC
 * **requestBody:** quantity=1&price=0.1&recvWindow=5000&timestamp=1499827319559
 * **HMAC SHA256 signature:**
@@ -293,6 +301,91 @@ timestamp | 1499827319559
 Note that the signature is different in example 3.
 There is no & between "GTC" and "quantity=1".
 
+
+### RSA Keys
+
+This will be a step by step process how to create the signature payload to send a valid signed payload.
+
+We support `PKCS#8` currently.
+
+To get your API key, you need to upload your RSA Public Key to your account and a corresponding API key will be provided for you.
+
+For this example, the private key will be referenced as `./test-prv-key.pem`
+
+Key | Value
+------------ | ------------
+apiKey | CAvIjXy3F44yW6Pou5k8Dy1swsYDWJZLeoK2r8G4cFDnE9nosRppc2eKc1T8TRTQ
+
+Parameter | Value
+------------ | ------------
+symbol | BTCUSDT
+side | SELL
+type | LIMIT
+timeInForce | GTC
+quantity | 1
+price | 0.2
+timestamp | 1668481559918
+recvWindow | 5000
+
+
+**Step 1: Construct the payload**
+
+Arrange the list of parameters into a string. Separate each parameter with a `&`.
+
+For the parameters above, the signature payload would look like this:
+
+```console
+symbol=BTCUSDT&side=SELL&type=LIMIT&timeInForce=GTC&quantity=1&price=0.2&timestamp=1668481559918&recvWindow=5000
+```
+
+**Step 2: Compute the signature:**
+
+1. Encode signature payload as ASCII data.
+2. Sign payload using RSASSA-PKCS1-v1_5 algorithm with SHA-256 hash function.
+
+```console
+$ echo -n 'symbol=BTCUSDT&side=SELL&type=LIMIT&timeInForce=GTC&quantity=1&price=0.2&timestamp=1668481559918&recvWindow=5000' | openssl dgst -sha256 -sign ./test-prv-key.pem
+```
+3. Encode output as base64 string.
+
+```console
+$  echo -n 'symbol=BTCUSDT&side=SELL&type=LIMIT&timeInForce=GTC&quantity=1&price=0.2&timestamp=1668481559918&recvWindow=5000' | openssl dgst -sha256 -sign ./test-prv-key.pem | openssl enc -base64 -A
+HZ8HOjiJ1s/igS9JA+n7+7Ti/ihtkRF5BIWcPIEluJP6tlbFM/Bf44LfZka/iemtahZAZzcO9TnI5uaXh3++lrqtNonCwp6/245UFWkiW1elpgtVAmJPbogcAv6rSlokztAfWk296ZJXzRDYAtzGH0gq7CgSJKfH+XxaCmR0WcvlKjNQnp12/eKXJYO4tDap8UCBLuyxDnR7oJKLHQHJLP0r0EAVOOSIbrFang/1WOq+Jaq4Efc4XpnTgnwlBbWTmhWDR1pvS9iVEzcSYLHT/fNnMRxFc7u+j3qI//5yuGuu14KR0MuQKKCSpViieD+fIti46sxPTsjSemoUKp0oXA==
+```
+4. Since the signature may contain `/` and `=`, this could cause issues with sending the request. So the signature has to be URL encoded.
+
+```console
+HZ8HOjiJ1s%2FigS9JA%2Bn7%2B7Ti%2FihtkRF5BIWcPIEluJP6tlbFM%2FBf44LfZka%2FiemtahZAZzcO9TnI5uaXh3%2B%2BlrqtNonCwp6%2F245UFWkiW1elpgtVAmJPbogcAv6rSlokztAfWk296ZJXzRDYAtzGH0gq7CgSJKfH%2BXxaCmR0WcvlKjNQnp12%2FeKXJYO4tDap8UCBLuyxDnR7oJKLHQHJLP0r0EAVOOSIbrFang%2F1WOq%2BJaq4Efc4XpnTgnwlBbWTmhWDR1pvS9iVEzcSYLHT%2FfNnMRxFc7u%2Bj3qI%2F%2F5yuGuu14KR0MuQKKCSpViieD%2BfIti46sxPTsjSemoUKp0oXA%3D%3D
+```
+
+5. The curl command:
+
+```console
+curl -H "X-MBX-APIKEY: CAvIjXy3F44yW6Pou5k8Dy1swsYDWJZLeoK2r8G4cFDnE9nosRppc2eKc1T8TRTQ" -X POST 'https://api.binance.com/api/v3/order?symbol=BTCUSDT&side=SELL&type=LIMIT&timeInForce=GTC&quantity=1&price=0.2&timestamp=1668481559918&recvWindow=5000&signature=HZ8HOjiJ1s%2FigS9JA%2Bn7%2B7Ti%2FihtkRF5BIWcPIEluJP6tlbFM%2FBf44LfZka%2FiemtahZAZzcO9TnI5uaXh3%2B%2BlrqtNonCwp6%2F245UFWkiW1elpgtVAmJPbogcAv6rSlokztAfWk296ZJXzRDYAtzGH0gq7CgSJKfH%2BXxaCmR0WcvlKjNQnp12%2FeKXJYO4tDap8UCBLuyxDnR7oJKLHQHJLP0r0EAVOOSIbrFang%2F1WOq%2BJaq4Efc4XpnTgnwlBbWTmhWDR1pvS9iVEzcSYLHT%2FfNnMRxFc7u%2Bj3qI%2F%2F5yuGuu14KR0MuQKKCSpViieD%2BfIti46sxPTsjSemoUKp0oXA%3D%3D'
+```
+
+A sample Bash script below does the similar steps said above.
+
+```bash
+API_KEY="put your own API Key here"
+PRIVATE_KEY_PATH="test-prv-key.pem"
+# Set up the request:
+API_METHOD="POST"
+API_CALL="api/v3/order"
+API_PARAMS="symbol=BTCUSDT&side=SELL&type=LIMIT&timeInForce=GTC&quantity=1&price=0.2"
+# Sign the request:
+timestamp=$(date +%s000)
+api_params_with_timestamp="$API_PARAMS&timestamp=$timestamp"
+signature=$(echo -n "$api_params_with_timestamp" \
+            | openssl dgst -sha256 -sign "$PRIVATE_KEY_PATH" \
+            | openssl enc -base64 -A)
+# Send the request:
+curl -H "X-MBX-APIKEY: $API_KEY" -X "$API_METHOD" \
+    "https://api.binance.com/$API_CALL?$api_params_with_timestamp" \
+    --data-urlencode "signature=$signature"
+```
+
+
 # Public API Endpoints
 ### Terminology
 
@@ -305,20 +398,26 @@ These terms will be used throughout the documentation, so it is recommended espe
 ## ENUM definitions
 **Symbol status (status):**
 
-* PRE_TRADING
-* TRADING
-* POST_TRADING
-* END_OF_DAY
-* HALT
-* AUCTION_MATCH
-* BREAK
+* `PRE_TRADING`
+* `TRADING`
+* `POST_TRADING`
+* `END_OF_DAY`
+* `HALT`
+* `AUCTION_MATCH`
+* `BREAK`
 
 **Account and Symbol Permissions (permissions):**
 
-* SPOT
-* MARGIN
-* LEVERAGED
-* TRD_GRP_002
+* `SPOT`
+* `MARGIN`
+* `LEVERAGED`
+* `TRD_GRP_002`
+* `TRD_GRP_003`
+* `TRD_GRP_004`
+* `TRD_GRP_005`
+* `TRD_GRP_006`
+* `TRD_GRP_007`
+
 
 **Order status (status):**
 
@@ -328,9 +427,10 @@ Status | Description
 `PARTIALLY_FILLED`| A part of the order has been filled.
 `FILLED` | The order has been completed.
 `CANCELED` | The order has been canceled by the user.
-` PENDING_CANCEL` | Currently unused
+`PENDING_CANCEL` | Currently unused
 `REJECTED`       | The order was not accepted by the engine and not processed.
-`EXPIRED` | The order was canceled according to the order type's rules (e.g. LIMIT FOK orders with no fill, LIMIT IOC or MARKET orders that partially fill) <br> or by the exchange, (e.g. orders canceled during liquidation, orders canceled during maintenance)
+`EXPIRED` | The order was canceled according to the order type's rules (e.g. LIMIT FOK orders with no fill, LIMIT IOC or MARKET orders that partially fill) <br/> or by the exchange, (e.g. orders canceled during liquidation, orders canceled during maintenance)
+`EXPIRED_IN_MATCH` | The order was expired by the exchange due to STP. (e.g. an order with `EXPIRE_TAKER` will match with existing orders on the book with the same account or same `tradeGroupId`)
 
 **OCO Status (listStatusType):**
 
@@ -345,34 +445,32 @@ Status | Description
 Status | Description
 -----------| --------------
 `EXECUTING` | Either an order list has been placed or there is an update to the status of the list.
-`ALL_DONE`| An order list has completed execution and thus no longer active. 
+`ALL_DONE`| An order list has completed execution and thus no longer active.
 `REJECT` | The List Status is responding to a failed action either during order placement or order canceled
 
 **ContingencyType**
-* OCO
+* `OCO`
 
 **Order types (orderTypes, type):**
 
-More information on how the order types definitions can be found here: [Types of Orders](https://www.binance.com/en/support/articles/360033779452-Types-of-Order)
-
-* LIMIT
-* MARKET
-* STOP_LOSS
-* STOP_LOSS_LIMIT
-* TAKE_PROFIT
-* TAKE_PROFIT_LIMIT
-* LIMIT_MAKER
+* `LIMIT`
+* `MARKET`
+* `STOP_LOSS`
+* `STOP_LOSS_LIMIT`
+* `TAKE_PROFIT`
+* `TAKE_PROFIT_LIMIT`
+* `LIMIT_MAKER`
 
 **Order Response Type (newOrderRespType):**
 
-* ACK
-* RESULT
-* FULL
+* `ACK`
+* `RESULT`
+* `FULL`
 
 **Order side (side):**
 
-* BUY
-* SELL
+* `BUY`
+* `SELL`
 
 **Time in force (timeInForce):**
 
@@ -380,14 +478,15 @@ This sets how long an order will be active before expiration.
 
 Status | Description
 -----------| --------------
-`GTC` | Good Til Canceled <br> An order will be on the book unless the order is canceled. 
-`IOC` | Immediate Or Cancel <br> An order will try to fill the order as much as it can before the order expires.
-`FOK`| Fill or Kill <br> An order will expire if the full order cannot be filled upon execution.
+`GTC` | Good Til Canceled <br/> An order will be on the book unless the order is canceled.
+`IOC` | Immediate Or Cancel <br/> An order will try to fill the order as much as it can before the order expires.
+`FOK`| Fill or Kill <br/> An order will expire if the full order cannot be filled upon execution.
 
 **Kline/Candlestick chart intervals:**
 
-m -> minutes; h -> hours; d -> days; w -> weeks; M -> months
+s-> seconds; m -> minutes; h -> hours; d -> days; w -> weeks; M -> months
 
+* 1s
 * 1m
 * 3m
 * 5m
@@ -497,15 +596,22 @@ Current exchange trading rules and symbol information
 
 **Parameters:**
 
-There are 3 possible options:
+There are 4 possible options:
 
 |Options|Example|
 ----- | ----|
 |No parameter|curl -X GET "https://api.binance.com/api/v3/exchangeInfo"|
 |symbol|curl -X GET "https://api.binance.com/api/v3/exchangeInfo?symbol=BNBBTC"|
-|symbols| curl -X GET "https://api.binance.com/api/v3/exchangeInfo?symbols=%5B%22BNBBTC%22,%22BTCUSDT%22%5D" or curl -g GET 'https://api.binance.com/api/v3/exchangeInfo?symbols=["BTCUSDT","BNBBTC"]'|
+|symbols| curl -X GET "https://api.binance.com/api/v3/exchangeInfo?symbols=%5B%22BNBBTC%22,%22BTCUSDT%22%5D" <br/> or <br/> curl -g -X  GET 'https://api.binance.com/api/v3/exchangeInfo?symbols=["BTCUSDT","BNBBTC"]' |
+|permissions| curl -X GET "https://api.binance.com/api/v3/exchangeInfo?permissions=SPOT" <br/> or <br/> curl -X GET "https://api.binance.com/api/v3/exchangeInfo?permissions=%5B%22MARGIN%22%2C%22LEVERAGED%22%5D" <br/> or <br/> curl -g -X GET 'https://api.binance.com/api/v3/exchangeInfo?permissions=["MARGIN","LEVERAGED"]' |
 
-If any symbol provided in either `symbol` or `symbols` do not exist, the endpoint will throw an error.
+**Notes**:
+* If the value provided to `symbol` or `symbols` do not exist, the endpoint will throw an error saying the symbol is invalid.
+* All parameters are optional.
+* `permissions` can support single or multiple values (e.g. `SPOT`, `["MARGIN","LEVERAGED"]`)
+* If `permissions` parameter not provided, the default values will be `["SPOT","MARGIN","LEVERAGED"]`.
+  * If one wants to view all symbols on `GET /api/v3/exchangeInfo`, then one has to search with all permissions explicitly specified
+  (i.e. `permissions=["SPOT","MARGIN","LEVERAGED","TRD_GRP_002","TRD_GRP_003","TRD_GRP_004","TRD_GRP_005","TRD_GRP_006","TRD_GRP_007"])`
 
 **Data Source:**
 Memory
@@ -548,6 +654,8 @@ Memory
       "icebergAllowed": true,
       "ocoAllowed": true,
       "quoteOrderQtyMarketAllowed": true,
+      "allowTrailingStop": false,
+      "cancelReplaceAllowed":false,
       "isSpotTradingAllowed": true,
       "isMarginTradingAllowed": true,
       "filters": [
@@ -557,6 +665,10 @@ Memory
       "permissions": [
         "SPOT",
         "MARGIN"
+      ],
+      "defaultSelfTradePreventionMode": "NONE",
+      "allowedSelfTradePreventionModes": [
+        "NONE"
       ]
     }
   ]
@@ -572,21 +684,19 @@ GET /api/v3/depth
 **Weight:**
 Adjusted based on the limit:
 
-
-Limit | Weight
------------- | ------------
-5, 10, 20, 50, 100 | 1
-500 | 5
-1000 | 10
-5000| 50
-
+|Limit|Request Weight
+------|-------
+1-100|  1
+101-500| 5
+501-1000| 10
+1001-5000| 50
 
 **Parameters:**
 
 Name | Type | Mandatory | Description
 ------------ | ------------ | ------------ | ------------
 symbol | STRING | YES |
-limit | INT | NO | Default 100; max 5000. Valid limits:[5, 10, 20, 50, 100, 500, 1000, 5000]
+limit | INT | NO | Default 100; max 5000. <br/> If limit > 5000. then the response will truncate to 5000.
 
 **Data Source:**
 Memory
@@ -699,7 +809,6 @@ startTime | LONG | NO | Timestamp in ms to get aggregate trades from INCLUSIVE.
 endTime | LONG | NO | Timestamp in ms to get aggregate trades until INCLUSIVE.
 limit | INT | NO | Default 500; max 1000.
 
-* If both startTime and endTime are sent, time between startTime and endTime must be less than 1 hour.
 * If fromId, startTime, and endTime are not sent, the most recent aggregate trades will be returned.
 
 **Data Source:**
@@ -750,22 +859,69 @@ Database
 ```javascript
 [
   [
-    1499040000000,      // Open time
-    "0.01634790",       // Open
-    "0.80000000",       // High
-    "0.01575800",       // Low
-    "0.01577100",       // Close
+    1499040000000,      // Kline open time
+    "0.01634790",       // Open price
+    "0.80000000",       // High price
+    "0.01575800",       // Low price
+    "0.01577100",       // Close price
     "148976.11427815",  // Volume
-    1499644799999,      // Close time
+    1499644799999,      // Kline Close time
     "2434.19055334",    // Quote asset volume
     308,                // Number of trades
     "1756.87402397",    // Taker buy base asset volume
     "28.46694368",      // Taker buy quote asset volume
-    "17928899.62484339" // Ignore.
+    "0"                 // Unused field, ignore.
   ]
 ]
 ```
 
+### UIKlines
+
+The request is similar to klines having the same parameters and response.
+
+`uiKlines` return modified kline data, optimized for presentation of candlestick charts.
+
+```
+GET /api/v3/uiKlines
+```
+
+**Weight:**
+1
+
+**Parameters:**
+
+Name      | Type   | Mandatory    | Description
+------    | ------ | ------------ | ------------
+symbol    | STRING | YES          |
+interval  | ENUM   | YES          |
+startTime | LONG   | NO           |
+endTime   | LONG   | NO           |
+limit     | INT    | NO           | Default 500; max 1000.
+
+* If `startTime` and `endTime` are not sent, the most recent klines are returned.
+
+**Data Source:**
+Database
+
+**Response:**
+```javascript
+[
+  [
+    1499040000000,      // Kline open time
+    "0.01634790",       // Open price
+    "0.80000000",       // High price
+    "0.01575800",       // Low price
+    "0.01577100",       // Close price
+    "148976.11427815",  // Volume
+    1499644799999,      // Kline close time
+    "2434.19055334",    // Quote asset volume
+    308,                // Number of trades
+    "1756.87402397",    // Taker buy base asset volume
+    "28.46694368",      // Taker buy quote asset volume
+    "0"                 // Unused field. Ignore.
+  ]
+]
+```
 
 ### Current average price
 Current average price for a symbol.
@@ -800,20 +956,86 @@ GET /api/v3/ticker/24hr
 24 hour rolling window price change statistics. **Careful** when accessing this with no symbol.
 
 **Weight:**
-1 for a single symbol; **40** when the symbol parameter is omitted
+
+<table>
+<thead>
+    <tr>
+        <th>Parameter</th>
+        <th>Symbols Provided</th>
+        <th>Weight</th>
+    </tr>
+</thead>
+<tbody>
+    <tr>
+        <td rowspan="2">symbol</td>
+        <td>1</td>
+        <td>1</td>
+    </tr>
+    <tr>
+        <td>symbol parameter is omitted</td>
+        <td>40</td>
+    </tr>
+    <tr>
+        <td rowspan="4">symbols</td>
+        <td>1-20</td>
+        <td>1</td>
+    </tr>
+    <tr>
+        <td>21-100</td>
+        <td>20</td>
+    </tr>
+    <tr>
+        <td>101 or more</td>
+        <td>40</td>
+    </tr>
+    <tr>
+        <td>symbols parameter is omitted</td>
+        <td>40</td>
+    </tr>
+</tbody>
+</table>
 
 **Parameters:**
 
-Name | Type | Mandatory | Description
------------- | ------------ | ------------ | ------------
-symbol | STRING | NO |
-
-* If the symbol is not sent, tickers for all symbols will be returned in an array.
+<table>
+<thead>
+    <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Mandatory</th>
+        <th>Description</th>
+    </tr>
+</thead>
+<tbody>
+    <tr>
+        <td>symbol</td>
+        <td>STRING</td>
+        <td>NO</td>
+        <td rowspan="2">Parameter symbol and symbols cannot be used in combination. <br/> If neither parameter is sent, tickers for all symbols will be returned in an array. <br/><br/>
+         Examples of accepted format for the symbols parameter:
+         ["BTCUSDT","BNBUSDT"] <br/>
+         or <br/>
+         %5B%22BTCUSDT%22,%22BNBUSDT%22%5D
+        </td>
+     </tr>
+     <tr>
+        <td>symbols</td>
+        <td>STRING</td>
+        <td>NO</td>
+     </tr>
+     <tr>
+        <td>type</td>
+        <td>ENUM</td>
+        <td>NO</td>
+        <td>Supported values: <tt>FULL</tt> or <tt>MINI</tt>. <br/>If none provided, the default is <tt>FULL</tt> </td>
+     </tr>
+</tbody>
+</table>
 
 **Data Source:**
 Memory
 
-**Response:**
+**Response - FULL:**
 ```javascript
 {
   "symbol": "BNBBTC",
@@ -868,6 +1090,60 @@ OR
 ]
 ```
 
+**Response - MINI**
+
+```javascript
+{
+  "symbol":      "BNBBTC",          // Symbol Name
+  "openPrice":   "99.00000000",     // Opening price of the Interval
+  "highPrice":   "100.00000000",    // Highest price in the interval
+  "lowPrice":    "0.10000000",      // Lowest  price in the interval
+  "lastPrice":   "4.00000200",      // Closing price of the interval
+  "volume":      "8913.30000000",   // Total trade volume (in base asset)
+  "quoteVolume": "15.30000000",     // Total trade volume (in quote asset)
+  "openTime":    1499783499040,     // Start of the ticker interval
+  "closeTime":   1499869899040,     // End of the ticker interval
+  "firstId":     28385,             // First tradeId considered
+  "lastId":      28460,             // Last tradeId considered
+  "count":       76                 // Total trade count
+}
+```
+
+OR
+
+```javascript
+[
+  {
+    "symbol": "BNBBTC",
+    "openPrice": "99.00000000",
+    "highPrice": "100.00000000",
+    "lowPrice": "0.10000000",
+    "lastPrice": "4.00000200",
+    "volume": "8913.30000000",
+    "quoteVolume": "15.30000000",
+    "openTime": 1499783499040,
+    "closeTime": 1499869899040,
+    "firstId": 28385,
+    "lastId": 28460,
+    "count": 76
+  },
+  {
+    "symbol": "LTCBTC",
+    "openPrice": "0.07000000",
+    "highPrice": "0.07000000",
+    "lowPrice": "0.07000000",
+    "lastPrice": "0.07000000",
+    "volume": "11.00000000",
+    "quoteVolume": "0.77000000",
+    "openTime": 1656908192899,
+    "closeTime": 1656994592899,
+    "firstId": 0,
+    "lastId": 10,
+    "count": 11
+  }
+]
+```
+
 
 ### Symbol price ticker
 ```
@@ -876,15 +1152,63 @@ GET /api/v3/ticker/price
 Latest price for a symbol or symbols.
 
 **Weight:**
-1 for a single symbol; **2** when the symbol parameter is omitted
+
+<table>
+<thead>
+    <tr>
+        <th>Parameter</th>
+        <th>Symbols Provided</th>
+        <th>Weight</th>
+    </tr>
+</thead>
+<tbody>
+    <tr>
+        <td rowspan="2">symbol</td>
+        <td>1</td>
+        <td>1</td>
+    </tr>
+    <tr>
+        <td>symbol parameter is omitted</td>
+        <td>2</td>
+    </tr>
+    <tr>
+        <td>symbols</td>
+        <td>Any</td>
+        <td>2</td>
+    </tr>
+</tbody>
+</table>
 
 **Parameters:**
 
-Name | Type | Mandatory | Description
------------- | ------------ | ------------ | ------------
-symbol | STRING | NO |
+<table>
+<thead>
+    <tr>
+      <th>Name</th>
+      <th>Type</th>
+      <th>Mandatory</th>
+      <th>Description</th>
+    </tr>
+</thead>
+<tbody>
+    <tr>
+        <td>symbol</td>
+        <td>STRING</td>
+        <td>NO</td>
+        <td rowspan="2"> Parameter symbol and symbols cannot be used in combination. <br/> If neither parameter is sent, prices for all symbols will be returned in an array. <br/><br/>
+        Examples of accepted format for the symbols parameter:
+         ["BTCUSDT","BNBUSDT"] <br/>
+         or <br/>
+         %5B%22BTCUSDT%22,%22BNBUSDT%22%5D</td>
+    </tr>
+    <tr>
+        <td>symbols</td>
+        <td>STRING</td>
+        <td>NO</td>
+    </tr>
+</tbody>
+</table>
 
-* If the symbol is not sent, prices for all symbols will be returned in an array.
 
 **Data Source:**
 Memory
@@ -917,15 +1241,64 @@ GET /api/v3/ticker/bookTicker
 Best price/qty on the order book for a symbol or symbols.
 
 **Weight:**
-1 for a single symbol; **2** when the symbol parameter is omitted
+
+<table>
+<thead>
+    <tr>
+        <th>Parameter</th>
+        <th>Symbols Provided</th>
+        <th>Weight</th>
+    </tr>
+</thead>
+<tbody>
+    <tr>
+        <td rowspan="2">symbol</td>
+        <td>1</td>
+        <td>1</td>
+    </tr>
+    <tr>
+        <td>symbol parameter is omitted</td>
+        <td>2</td>
+    </tr>
+    <tr>
+        <td>symbols</td>
+        <td>Any</td>
+        <td>2</td>
+    </tr>
+</tbody>
+</table>
 
 **Parameters:**
 
-Name | Type | Mandatory | Description
------------- | ------------ | ------------ | ------------
-symbol | STRING | NO |
+<table>
+<thead>
+    <tr>
+      <th>Name</th>
+      <th>Type</th>
+      <th>Mandatory</th>
+      <th>Description</th>
+    </tr>
+</thead>
+<tbody>
+    <tr>
+        <td>symbol</td>
+        <td>STRING</td>
+        <td>NO</td>
+        <td rowspan="2"> Parameter symbol and symbols cannot be used in combination. <br/> If neither parameter is sent, bookTickers for all symbols will be returned in an array.
+         <br/><br/>
+        Examples of accepted format for the symbols parameter:
+         ["BTCUSDT","BNBUSDT"] <br/>
+         or <br/>
+         %5B%22BTCUSDT%22,%22BNBUSDT%22%5D</td>
+    </tr>
+    <tr>
+        <td>symbols</td>
+        <td>STRING</td>
+        <td>NO</td>
+    </tr>
+</tbody>
+</table>
 
-* If the symbol is not sent, bookTickers for all symbols will be returned in an array.
 
 **Data Source:**
 Memory
@@ -960,6 +1333,185 @@ OR
 ]
 ```
 
+### Rolling window price change statistics
+```
+GET /api/v3/ticker
+```
+
+**Note:** This endpoint is different from the `GET /api/v3/ticker/24hr` endpoint.
+
+The window used to compute statistics will be no more than 59999ms from the requested `windowSize`.
+
+`openTime` for `/api/v3/ticker` always starts on a minute, while the `closeTime` is the current time of the request.
+As such, the effective window will be up to 59999ms wider than `windowSize`.
+
+E.g. If the `closeTime` is 1641287867099 (January 04, 2022 09:17:47:099 UTC) , and the `windowSize` is `1d`. the `openTime` will be: 1641201420000 (January 3, 2022, 09:17:00)
+
+**Weight:**
+
+2 for each requested <tt>symbol</tt> regardless of <tt>windowSize</tt>. <br/><br/> The weight for this request will cap at 100 once the number of `symbols` in the request is more than 50.
+
+**Parameters**
+
+<table>
+  <tr>
+    <th>Name</th>
+    <th>Type</th>
+    <th>Mandatory</th>
+    <th>Description</th>
+  </tr>
+  <tr>
+    <td>symbol</td>
+    <td rowspan="2">STRING</td>
+    <td rowspan="2">YES</td>
+    <td rowspan="2">Either <tt>symbol</tt> or <tt>symbols</tt> must be provided <br/><br/> Examples of accepted format for the <tt>symbols</tt> parameter: <br/> ["BTCUSDT","BNBUSDT"] <br/>or <br/>%5B%22BTCUSDT%22,%22BNBUSDT%22%5D <br/><br/> The maximum number of <tt>symbols</tt> allowed in a request is 100.
+    </td>
+  </tr>
+  <tr>
+     <td>symbols</td>
+  </tr>
+  <tr>
+     <td>windowSize</td>
+     <td>ENUM</td>
+     <td>NO</td>
+     <td>Defaults to <tt>1d</tt> if no parameter provided <br/> Supported <tt>windowSize</tt> values: <br/> <tt>1m</tt>,<tt>2m</tt>....<tt>59m</tt> for minutes <br/> <tt>1h</tt>, <tt>2h</tt>....<tt>23h</tt> - for hours <br/> <tt>1d</tt>...<tt>7d</tt> - for days <br/><br/> Units cannot be combined (e.g. <tt>1d2h</tt> is not allowed)</td>
+  </tr>
+  <tr>
+      <td>type</td>
+      <td>ENUM</td>
+      <td>NO</td>
+      <td>Supported values: <tt>FULL</tt> or <tt>MINI</tt>. <br/>If none provided, the default is <tt>FULL</tt> </td>
+  </tr>
+</table>
+
+**Data Source:**
+Database
+
+**Response - FULL**
+
+When using `symbol`:
+
+```javascript
+{
+  "symbol":             "BNBBTC",
+  "priceChange":        "-8.00000000",  // Absolute price change
+  "priceChangePercent": "-88.889",      // Relative price change in percent
+  "weightedAvgPrice":   "2.60427807",   // QuoteVolume / Volume
+  "openPrice":          "9.00000000",
+  "highPrice":          "9.00000000",
+  "lowPrice":           "1.00000000",
+  "lastPrice":          "1.00000000",
+  "volume":             "187.00000000",
+  "quoteVolume":        "487.00000000", // Sum of (price * volume) for all trades
+  "openTime":           1641859200000,  // Open time for ticker window
+  "closeTime":          1642031999999,  // Close time for ticker window
+  "firstId":            0,              // Trade IDs
+  "lastId":             60,
+  "count":              61              // Number of trades in the interval
+}
+
+```
+or
+
+When using `symbols`:
+
+```javascript
+[
+  {
+    "symbol": "BTCUSDT",
+    "priceChange": "-154.13000000",        // Absolute price change
+    "priceChangePercent": "-0.740",        // Relative price change in percent
+    "weightedAvgPrice": "20677.46305250",  // QuoteVolume / Volume
+    "openPrice": "20825.27000000",
+    "highPrice": "20972.46000000",
+    "lowPrice": "20327.92000000",
+    "lastPrice": "20671.14000000",
+    "volume": "72.65112300",
+    "quoteVolume": "1502240.91155513",     // Sum of (price * volume) for all trades
+    "openTime": 1655432400000,             // Open time for ticker window
+    "closeTime": 1655446835460,            // Close time for ticker window
+    "firstId": 11147809,                   // Trade IDs
+    "lastId": 11149775,
+    "count": 1967                          // Number of trades in the interval
+  },
+  {
+    "symbol": "BNBBTC",
+    "priceChange": "0.00008530",
+    "priceChangePercent": "0.823",
+    "weightedAvgPrice": "0.01043129",
+    "openPrice": "0.01036170",
+    "highPrice": "0.01049850",
+    "lowPrice": "0.01033870",
+    "lastPrice": "0.01044700",
+    "volume": "166.67000000",
+    "quoteVolume": "1.73858301",
+    "openTime": 1655432400000,
+    "closeTime": 1655446835460,
+    "firstId": 2351674,
+    "lastId": 2352034,
+    "count": 361
+  }
+]
+```
+
+**Response - MINI**
+
+When using `symbol`:
+
+```javascript
+{
+    "symbol": "LTCBTC",
+    "openPrice": "0.10000000",
+    "highPrice": "2.00000000",
+    "lowPrice": "0.10000000",
+    "lastPrice": "2.00000000",
+    "volume": "39.00000000",
+    "quoteVolume": "13.40000000",  // Sum of (price * volume) for all trades
+    "openTime": 1656986580000,     // Open time for ticker window
+    "closeTime": 1657001016795,    // Close time for ticker window
+    "firstId": 0,                  // Trade IDs
+    "lastId": 34,
+    "count": 35                    // Number of trades in the interval
+}
+```
+
+OR
+
+When using `symbols`:
+
+```javascript
+[
+    {
+        "symbol": "BNBBTC",
+        "openPrice": "0.10000000",
+        "highPrice": "2.00000000",
+        "lowPrice": "0.10000000",
+        "lastPrice": "2.00000000",
+        "volume": "39.00000000",
+        "quoteVolume": "13.40000000", // Sum of (price * volume) for all trades
+        "openTime": 1656986880000,    // Open time for ticker window
+        "closeTime": 1657001297799,   // Close time for ticker window
+        "firstId": 0,                 // Trade IDs
+        "lastId": 34,
+        "count": 35                   // Number of trades in the interval
+    },
+    {
+        "symbol": "LTCBTC",
+        "openPrice": "0.07000000",
+        "highPrice": "0.07000000",
+        "lowPrice": "0.07000000",
+        "lastPrice": "0.07000000",
+        "volume": "33.00000000",
+        "quoteVolume": "2.31000000",
+        "openTime": 1656986880000,
+        "closeTime": 1657001297799,
+        "firstId": 0,
+        "lastId": 32,
+        "count": 33
+    }
+]
+```
+
 ## Account endpoints
 ### New order  (TRADE)
 ```
@@ -981,29 +1533,35 @@ timeInForce | ENUM | NO |
 quantity | DECIMAL | NO |
 quoteOrderQty|DECIMAL|NO|
 price | DECIMAL | NO |
-newClientOrderId | STRING | NO | A unique id among open orders. Automatically generated if not sent.<br> Orders with the same `newClientOrderID` can be accepted only when the previous one is filled, otherwise the order will be rejected.
+newClientOrderId | STRING | NO | A unique id among open orders. Automatically generated if not sent.<br/> Orders with the same `newClientOrderID` can be accepted only when the previous one is filled, otherwise the order will be rejected.
+strategyId |INT| NO|
+strategyType |INT| NO| The value cannot be less than `1000000`.
 stopPrice | DECIMAL | NO | Used with `STOP_LOSS`, `STOP_LOSS_LIMIT`, `TAKE_PROFIT`, and `TAKE_PROFIT_LIMIT` orders.
+trailingDelta|LONG|NO| Used with `STOP_LOSS`, `STOP_LOSS_LIMIT`, `TAKE_PROFIT`, and `TAKE_PROFIT_LIMIT` orders.
 icebergQty | DECIMAL | NO | Used with `LIMIT`, `STOP_LOSS_LIMIT`, and `TAKE_PROFIT_LIMIT` to create an iceberg order.
 newOrderRespType | ENUM | NO | Set the response JSON. `ACK`, `RESULT`, or `FULL`; `MARKET` and `LIMIT` order types default to `FULL`, all other orders default to `ACK`.
+selfTradePreventionMode |ENUM| NO | The allowed enums is dependent on what is configured on the symbol. The possible supported values are `EXPIRE_TAKER`, `EXPIRE_MAKER`, `EXPIRE_BOTH`, `NONE`.
 recvWindow | LONG | NO |The value cannot be greater than ```60000```
 timestamp | LONG | YES |
+
 
 Some additional mandatory parameters based on order `type`:
 
 Type | Additional mandatory parameters | Additional Information
 ------------ | ------------| ------
-`LIMIT` | `timeInForce`, `quantity`, `price`| 
-`MARKET` | `quantity` or `quoteOrderQty`| `MARKET` orders using the `quantity` field specifies the amount of the `base asset` the user wants to buy or sell at the market price. <br> E.g. MARKET order on BTCUSDT will specify how much BTC the user is buying or selling. <br><br> `MARKET` orders using `quoteOrderQty` specifies the amount the user wants to spend (when buying) or receive (when selling) the `quote` asset; the correct `quantity` will be determined based on the market liquidity and `quoteOrderQty`. <br> E.g. Using the symbol BTCUSDT: <br> `BUY` side, the order will buy as many BTC as `quoteOrderQty` USDT can. <br> `SELL` side, the order will sell as much BTC needed to receive `quoteOrderQty` USDT.
-`STOP_LOSS` | `quantity`, `stopPrice`| This will execute a `MARKET` order when the `stopPrice` is reached.
-`STOP_LOSS_LIMIT` | `timeInForce`, `quantity`,  `price`, `stopPrice` 
-`TAKE_PROFIT` | `quantity`, `stopPrice`| This will execute a `MARKET` order when the `stopPrice` is reached.
-`TAKE_PROFIT_LIMIT` | `timeInForce`, `quantity`, `price`, `stopPrice` | 
-`LIMIT_MAKER` | `quantity`, `price`| This is a `LIMIT` order that will be rejected if the order immediately matches and trades as a taker. <br> This is also known as a POST-ONLY order. 
+`LIMIT` | `timeInForce`, `quantity`, `price`|
+`MARKET` | `quantity` or `quoteOrderQty`| `MARKET` orders using the `quantity` field specifies the amount of the `base asset` the user wants to buy or sell at the market price. <br/> E.g. MARKET order on BTCUSDT will specify how much BTC the user is buying or selling. <br/><br/> `MARKET` orders using `quoteOrderQty` specifies the amount the user wants to spend (when buying) or receive (when selling) the `quote` asset; the correct `quantity` will be determined based on the market liquidity and `quoteOrderQty`. <br/> E.g. Using the symbol BTCUSDT: <br/> `BUY` side, the order will buy as many BTC as `quoteOrderQty` USDT can. <br/> `SELL` side, the order will sell as much BTC needed to receive `quoteOrderQty` USDT.
+`STOP_LOSS` | `quantity`, `stopPrice` or `trailingDelta`| This will execute a `MARKET` order when the conditions are met. (e.g. `stopPrice` is met or `trailingDelta` is activated)
+`STOP_LOSS_LIMIT` | `timeInForce`, `quantity`,  `price`, `stopPrice` or `trailingDelta`
+`TAKE_PROFIT` | `quantity`, `stopPrice` or `trailingDelta` | This will execute a `MARKET` order when the conditions are met. (e.g. `stopPrice` is met or `trailingDelta` is activated)
+`TAKE_PROFIT_LIMIT` | `timeInForce`, `quantity`, `price`, `stopPrice` or `trailingDelta` |
+`LIMIT_MAKER` | `quantity`, `price`| This is a `LIMIT` order that will be rejected if the order immediately matches and trades as a taker. <br/> This is also known as a POST-ONLY order.
 
 Other info:
 
 * Any `LIMIT` or `LIMIT_MAKER` type order can be made an iceberg order by sending an `icebergQty`.
 * Any order with an `icebergQty` MUST have `timeInForce` set to `GTC`.
+* For `STOP_LOSS`, `STOP_LOSS_LIMIT`, `TAKE_PROFIT_LIMIT` and `TAKE_PROFIT` orders, `trailingDelta` can be combined with `stopPrice`.
 * `MARKET` orders using `quoteOrderQty` will not break `LOT_SIZE` filter rules; the order will execute a `quantity` that will have the notional value as close as possible to `quoteOrderQty`.
 Trigger order price rules against market price for both MARKET and LIMIT versions:
 
@@ -1039,7 +1597,11 @@ Matching Engine
   "status": "FILLED",
   "timeInForce": "GTC",
   "type": "MARKET",
-  "side": "SELL"
+  "side": "SELL",
+  "strategyId": 1,               // This is only visible if the field was populated on order placement.
+  "strategyType": 1000000,       // This is only visible if the field was populated on order placement.
+  "workingTime": 1507725176595,
+  "selfTradePreventionMode": "NONE"
 }
 ```
 
@@ -1059,36 +1621,45 @@ Matching Engine
   "timeInForce": "GTC",
   "type": "MARKET",
   "side": "SELL",
+  "strategyId": 1,               // This is only visible if the field was populated on order placement.
+  "strategyType": 1000000,       // This is only visible if the field was populated on order placement.
+  "workingTime": 1507725176595,
+  "selfTradePreventionMode": "NONE",
   "fills": [
     {
       "price": "4000.00000000",
       "qty": "1.00000000",
       "commission": "4.00000000",
-      "commissionAsset": "USDT"
+      "commissionAsset": "USDT",
+      "tradeId": 56
     },
     {
       "price": "3999.00000000",
       "qty": "5.00000000",
       "commission": "19.99500000",
-      "commissionAsset": "USDT"
+      "commissionAsset": "USDT",
+      "tradeId": 57
     },
     {
       "price": "3998.00000000",
       "qty": "2.00000000",
       "commission": "7.99600000",
-      "commissionAsset": "USDT"
+      "commissionAsset": "USDT",
+      "tradeId": 58
     },
     {
       "price": "3997.00000000",
       "qty": "1.00000000",
       "commission": "3.99700000",
-      "commissionAsset": "USDT"
+      "commissionAsset": "USDT",
+      "tradeId": 59
     },
     {
       "price": "3995.00000000",
       "qty": "1.00000000",
       "commission": "3.99500000",
-      "commissionAsset": "USDT"
+      "commissionAsset": "USDT",
+      "tradeId": 60
     }
   ]
 }
@@ -1140,14 +1711,14 @@ Notes:
 * For some historical orders `cummulativeQuoteQty` will be < 0, meaning the data is not available at this time.
 
 **Data Source:**
-Database
+Memory => Database
 
 **Response:**
 ```javascript
 {
   "symbol": "LTCBTC",
   "orderId": 1,
-  "orderListId": -1 //Unless part of an OCO, the value will always be -1.
+  "orderListId": -1                 // This field will always have a value of -1 if not an OCO.
   "clientOrderId": "myOrder1",
   "price": "0.1",
   "origQty": "1.0",
@@ -1158,11 +1729,19 @@ Database
   "type": "LIMIT",
   "side": "BUY",
   "stopPrice": "0.0",
+  "trailingDelta": 100,             // This field only appear for Trailing Stop Orders.
+  "trailingTime": -1,               // This field only appears for Trailing Stop Orders.
   "icebergQty": "0.0",
   "time": 1499827319559,
   "updateTime": 1499827319559,
   "isWorking": true,
-  "origQuoteOrderQty": "0.000000"
+  "workingTime":1499827319559,
+  "origQuoteOrderQty": "0.000000",
+  "strategyId": 1,                  // This field only appears if the parameter was provided in the request.
+  "strategyType": 1000001,          // This field only appears if the parameter was provided in the request.
+  "selfTradePreventionMode": "NONE",
+  "preventedMatchId": 0,            // This field only appears if the order expired due to STP.
+  "preventedQuantity": "1.200000"   // This field only appears if the order expired due to STP.
 }
 ```
 
@@ -1187,6 +1766,7 @@ recvWindow | LONG | NO | The value cannot be greater than ```60000```
 timestamp | LONG | YES |
 
 Either `orderId` or `origClientOrderId` must be sent.
+If both parameters are sent, `orderId` takes precedence.
 
 **Data Source:**
 Matching Engine
@@ -1206,7 +1786,8 @@ Matching Engine
   "status": "CANCELED",
   "timeInForce": "GTC",
   "type": "LIMIT",
-  "side": "BUY"
+  "side": "BUY",
+  "selfTradePreventionMode": "NONE"
 }
 ```
 
@@ -1245,7 +1826,8 @@ Matching Engine
     "status": "CANCELED",
     "timeInForce": "GTC",
     "type": "LIMIT",
-    "side": "BUY"
+    "side": "BUY",
+    "selfTradePreventionMode": "NONE"
   },
   {
     "symbol": "BTCUSDT",
@@ -1260,7 +1842,8 @@ Matching Engine
     "status": "CANCELED",
     "timeInForce": "GTC",
     "type": "LIMIT",
-    "side": "BUY"
+    "side": "BUY",
+    "selfTradePreventionMode": "NONE"
   },
   {
     "orderListId": 1929,
@@ -1298,7 +1881,8 @@ Matching Engine
         "type": "STOP_LOSS_LIMIT",
         "side": "BUY",
         "stopPrice": "0.378131",
-        "icebergQty": "0.017083"
+        "icebergQty": "0.017083",
+        "selfTradePreventionMode": "NONE"
       },
       {
         "symbol": "BTCUSDT",
@@ -1314,12 +1898,200 @@ Matching Engine
         "timeInForce": "GTC",
         "type": "LIMIT_MAKER",
         "side": "BUY",
-        "icebergQty": "0.639962"
+        "icebergQty": "0.639962",
+        "selfTradePreventionMode": "NONE"
       }
     ]
   }
 ]
 ```
+
+### Cancel an Existing Order and Send a New Order (TRADE)
+
+```
+POST /api/v3/order/cancelReplace
+```
+Cancels an existing order and places a new order on the same symbol.
+
+Filters and Order Count are evaluated before the processing of the cancellation and order placement occurs.
+
+A new order that was not attempted (i.e. when `newOrderResult: NOT_ATTEMPTED` ), will still increase the order count by 1.
+
+**Weight:**
+1
+
+**Parameters:**
+
+Name | Type | Mandatory | Description
+------------ | ------------ | ------------ | ------------
+symbol | STRING | YES |
+side   |ENUM| YES|
+type   |ENUM| YES|
+cancelReplaceMode|ENUM|YES| The allowed values are: <br/> `STOP_ON_FAILURE` - If the cancel request fails, the new order placement will not be attempted. <br/> `ALLOW_FAILURE` - new order placement will be attempted even if cancel request fails.
+timeInForce|ENUM|NO|
+quantity|DECIMAL|NO|
+quoteOrderQty |DECIMAL|NO
+price |DECIMAL|NO
+cancelNewClientOrderId|STRING|NO| Used to uniquely identify this cancel. Automatically generated by default.
+cancelOrigClientOrderId|STRING| NO| Either the `cancelOrigClientOrderId` or `cancelOrderId` must be provided. If both are provided, `cancelOrderId` takes precedence.
+cancelOrderId|LONG|NO| Either the `cancelOrigClientOrderId` or `cancelOrderId` must be provided. If both are provided, `cancelOrderId` takes precedence.
+newClientOrderId |STRING|NO| Used to identify the new order.
+strategyId |INT| NO|
+strategyType |INT| NO| The value cannot be less than `1000000`.
+stopPrice|DECIMAL|NO|
+trailingDelta|LONG|NO|
+icebergQty|DECIMAL|NO|
+newOrderRespType|ENUM|NO|Allowed values: <br/> `ACK`, `RESULT`, `FULL` <br/> `MARKET` and `LIMIT` orders types default to `FULL`; all other orders default to `ACK`
+selfTradePreventionMode |ENUM| NO | The allowed enums is dependent on what is configured on the symbol. The possible supported values are `EXPIRE_TAKER`, `EXPIRE_MAKER`, `EXPIRE_BOTH`, `NONE`.
+recvWindow | LONG | NO | The value cannot be greater than `60000`
+timestamp | LONG | YES |
+
+
+Similar to `POST /api/v3/order`, additional mandatory parameters are determined by `type`.
+
+Response format varies depending on whether the processing of the message succeeded, partially succeeded, or failed.
+
+**Data Source:**
+Matching Engine
+
+**Response SUCCESS:**
+
+```javascript
+//Both the cancel order placement and new order placement succeeded.
+{
+  "cancelResult": "SUCCESS",
+  "newOrderResult": "SUCCESS",
+  "cancelResponse": {
+    "symbol": "BTCUSDT",
+    "origClientOrderId": "DnLo3vTAQcjha43lAZhZ0y",
+    "orderId": 9,
+    "orderListId": -1,
+    "clientOrderId": "osxN3JXAtJvKvCqGeMWMVR",
+    "price": "0.01000000",
+    "origQty": "0.000100",
+    "executedQty": "0.00000000",
+    "cummulativeQuoteQty": "0.00000000",
+    "status": "CANCELED",
+    "timeInForce": "GTC",
+    "type": "LIMIT",
+    "side": "SELL",
+    "selfTradePreventionMode": "NONE"
+  },
+  "newOrderResponse": {
+    "symbol": "BTCUSDT",
+    "orderId": 10,
+    "orderListId": -1,
+    "clientOrderId": "wOceeeOzNORyLiQfw7jd8S",
+    "transactTime": 1652928801803,
+    "price": "0.02000000",
+    "origQty": "0.040000",
+    "executedQty": "0.00000000",
+    "cummulativeQuoteQty": "0.00000000",
+    "status": "NEW",
+    "timeInForce": "GTC",
+    "type": "LIMIT",
+    "side": "BUY",
+    "workingTime": 1669277163808,
+    "fills": [],
+    "selfTradePreventionMode": "NONE"
+  }
+}
+```
+
+**Response when Cancel Order Fails with STOP_ON FAILURE:**
+```javascript
+{
+  "code": -2022,
+  "msg": "Order cancel-replace failed.",
+  "data": {
+    "cancelResult": "FAILURE",
+    "newOrderResult": "NOT_ATTEMPTED",
+    "cancelResponse": {
+      "code": -2011,
+      "msg": "Unknown order sent."
+    },
+    "newOrderResponse": null
+  }
+}
+```
+
+**Response when Cancel Order Succeeds but New Order Placement Fails:**
+```javascript
+{
+  "code": -2021,
+  "msg": "Order cancel-replace partially failed.",
+  "data": {
+    "cancelResult": "SUCCESS",
+    "newOrderResult": "FAILURE",
+    "cancelResponse": {
+      "symbol": "BTCUSDT",
+      "origClientOrderId": "86M8erehfExV8z2RC8Zo8k",
+      "orderId": 3,
+      "orderListId": -1,
+      "clientOrderId": "G1kLo6aDv2KGNTFcjfTSFq",
+      "price": "0.006123",
+      "origQty": "10000.000000",
+      "executedQty": "0.000000",
+      "cummulativeQuoteQty": "0.000000",
+      "status": "CANCELED",
+      "timeInForce": "GTC",
+      "type": "LIMIT_MAKER",
+      "side": "SELL",
+      "selfTradePreventionMode": "NONE"
+    },
+    "newOrderResponse": {
+      "code": -2010,
+      "msg": "Order would immediately match and take."
+    }
+  }
+}
+```
+
+**Response when Cancel Order fails with ALLOW_FAILURE:**
+
+```javascript
+{
+  "code": -2021,
+  "msg": "Order cancel-replace partially failed.",
+  "data": {
+    "cancelResult": "FAILURE",
+    "newOrderResult": "SUCCESS",
+    "cancelResponse": {
+      "code": -2011,
+      "msg": "Unknown order sent."
+    },
+    "newOrderResponse": {
+      "symbol": "BTCUSDT",
+      "orderId": 11,
+      "orderListId": -1,
+      "clientOrderId": "pfojJMg6IMNDKuJqDxvoxN",
+      "transactTime": 1648540168818
+    }
+  }
+}
+```
+
+**Response when both Cancel Order and New Order Placement fail:**
+
+```javascript
+{
+  "code": -2022,
+  "msg": "Order cancel-replace failed.",
+  "data": {
+    "cancelResult": "FAILURE",
+    "newOrderResult": "FAILURE",
+    "cancelResponse": {
+      "code": -2011,
+      "msg": "Unknown order sent."
+    },
+    "newOrderResponse": {
+      "code": -2010,
+      "msg": "Order would immediately match and take."
+    }
+  }
+}
+```
+
 
 ### Current open orders (USER_DATA)
 ```
@@ -1341,7 +2113,7 @@ timestamp | LONG | YES |
 * If the symbol is not sent, orders for all symbols will be returned in an array.
 
 **Data Source:**
-Database
+Memory => Database
 
 **Response:**
 ```javascript
@@ -1364,7 +2136,9 @@ Database
     "time": 1499827319559,
     "updateTime": 1499827319559,
     "isWorking": true,
-    "origQuoteOrderQty": "0.000000"
+    "origQuoteOrderQty": "0.000000",
+    "workingTime": 1499827319559,
+    "selfTradePreventionMode": "NONE"
   }
 ]
 ```
@@ -1396,7 +2170,7 @@ timestamp | LONG | YES |
 **Notes:**
 * If `orderId` is set, it will get orders >= that `orderId`. Otherwise most recent orders are returned.
 * For some historical orders `cummulativeQuoteQty` will be < 0, meaning the data is not available at this time.
-* If `startTime` and/or `endTime` provided, `orderId`  is not required. 
+* If `startTime` and/or `endTime` provided, `orderId`  is not required.
 
 **Response:**
 ```javascript
@@ -1419,7 +2193,11 @@ timestamp | LONG | YES |
     "time": 1499827319559,
     "updateTime": 1499827319559,
     "isWorking": true,
-    "origQuoteOrderQty": "0.000000"
+    "origQuoteOrderQty": "0.000000",
+    "workingTime": 1499827319559,
+    "selfTradePreventionMode": "NONE",
+    "preventedMatchId": 0,            //This field only appears if the order expired due to STP.
+    "preventedQuantity": "1.200000"   //This field only appears if the order expired due to STP.
   }
 ]
 ```
@@ -1444,13 +2222,19 @@ side|ENUM|YES|
 quantity|DECIMAL|YES|
 limitClientOrderId|STRING|NO| A unique Id for the limit order
 price|DECIMAL|YES|
+limitStrategyId |INT| NO
+limitStrategyType | INT| NO | The value cannot be less than `1000000`.
 limitIcebergQty|DECIMAL|NO| Used to make the `LIMIT_MAKER` leg an iceberg order.
+trailingDelta|LONG|NO|
 stopClientOrderId |STRING|NO| A unique Id for the stop loss/stop loss limit leg
 stopPrice |DECIMAL| YES
+stopStrategyId |INT| NO
+stopStrategyType |INT| NO | The value cannot be less than `1000000`.
 stopLimitPrice|DECIMAL|NO | If provided, `stopLimitTimeInForce` is required.
 stopIcebergQty|DECIMAL|NO| Used with `STOP_LOSS_LIMIT` leg to make an iceberg order.
 stopLimitTimeInForce|ENUM|NO| Valid values are `GTC`/`FOK`/`IOC`
 newOrderRespType|ENUM|NO| Set the response JSON.
+selfTradePreventionMode |ENUM| NO | The allowed enums is dependent on what is configured on the symbol. The possible supported values are `EXPIRE_TAKER`, `EXPIRE_MAKER`, `EXPIRE_BOTH`, `NONE`.
 recvWindow|LONG|NO| The value cannot be greater than `60000`
 timestamp|LONG|YES|
 
@@ -1463,7 +2247,7 @@ Additional Info:
     * Both legs must have the same quantity.
     * ```ICEBERG``` quantities however do not have to be the same
 * Order Rate Limit
-    * `OCO` counts as 2 orders against the order rate limit. 
+    * `OCO` counts as 2 orders against the order rate limit.
 
 **Data Source:**
 Matching Engine
@@ -1506,7 +2290,9 @@ Matching Engine
       "timeInForce": "GTC",
       "type": "STOP_LOSS",
       "side": "BUY",
-      "stopPrice": "0.960664"
+      "stopPrice": "0.960664",
+      "workingTime": -1,
+      "selfTradePreventionMode": "NONE"
     },
     {
       "symbol": "LTCBTC",
@@ -1521,7 +2307,9 @@ Matching Engine
       "status": "NEW",
       "timeInForce": "GTC",
       "type": "LIMIT_MAKER",
-      "side": "BUY"
+      "side": "BUY",
+      "workingTime": 1563417480525,
+      "selfTradePreventionMode": "NONE"
     }
   ]
 }
@@ -1551,6 +2339,7 @@ timestamp|LONG|YES|
 
 Additional notes:
 * Canceling an individual leg will cancel the entire OCO
+* If both `orderListId` and `listClientOrderId` are sent, `orderListId` takes precedence.
 
 **Data Source:**
 Matching Engine
@@ -1593,7 +2382,8 @@ Matching Engine
       "timeInForce": "GTC",
       "type": "STOP_LOSS_LIMIT",
       "side": "SELL",
-      "stopPrice": "1.00000000"
+      "stopPrice": "1.00000000",
+      "selfTradePreventionMode": "NONE"
     },
     {
       "symbol": "LTCBTC",
@@ -1608,7 +2398,8 @@ Matching Engine
       "status": "CANCELED",
       "timeInForce": "GTC",
       "type": "LIMIT_MAKER",
-      "side": "SELL"
+      "side": "SELL",
+      "selfTradePreventionMode": "NONE"
     }
   ]
 }
@@ -1809,9 +2600,17 @@ Memory => Database
   "takerCommission": 15,
   "buyerCommission": 0,
   "sellerCommission": 0,
+  "commissionRates": {
+    "maker": "0.00150000",
+    "taker": "0.00150000",
+    "buyer": "0.00000000",
+    "seller": "0.00000000"
+  },
   "canTrade": true,
   "canWithdraw": true,
   "canDeposit": true,
+  "brokered":false,
+  "requireSelfTradePrevention": false,
   "updateTime": 123456789,
   "accountType": "SPOT",
   "balances": [
@@ -1857,9 +2656,18 @@ timestamp | LONG | YES |
 **Notes:**
 * If `fromId` is set, it will get trades >= that `fromId`.
 Otherwise most recent trades are returned.
+* The time between `startTime` and `endTime` can't be longer than 24 hours.
+* These are the supported combinations of all parameters:
+  * `symbol`
+  * `symbol` + `orderId`
+  * `symbol` + `startTime`
+  * `symbol` + `endTime`
+  * `symbol` + `fromId`
+  * `symbol` + `startTime` + `endTime`
+  * `symbol`+ `orderId` + `fromId`
 
 **Data Source:**
-Database
+Memory => Database
 
 **Response:**
 ```javascript
@@ -1925,6 +2733,64 @@ Memory
 ]
 ```
 
+### Query Prevented Matches (USER_DATA)
+
+```
+GET /api/v3/myPreventedMatches
+```
+
+Displays the list of orders that were expired due to STP.
+
+These are the combinations supported:
+
+* `symbol` + `preventedMatchId`
+* `symbol` + `orderId`
+* `symbol` + `orderId` + `fromPreventedMatchId` (`limit` will default to 500)
+* `symbol` + `orderId` + `fromPreventedMatchId` + `limit`
+
+**Parameters:**
+
+Name                | Type   | Mandatory    | Description
+------------        | ----   | ------------ | ------------
+symbol              | STRING | YES          |
+preventedMatchId    |LONG    | NO           |
+orderId             |LONG    | NO           |
+fromPreventedMatchId|LONG    | NO           |
+limit               |INT     | NO           | Default: `500`; Max: `1000`
+recvWindow          | LONG   | NO           | The value cannot be greater than `60000`
+timestamp           | LONG   | YES          |
+
+**Weight**
+
+Case                            | Weight
+----                            | -----
+If `symbol` is invalid          | 1
+Querying by `preventedMatchId`  | 1
+Querying by `orderId`           | 10
+
+**Data Source:**
+
+Database
+
+**Response:**
+
+```json
+[
+  {
+    "symbol": "BTCUSDT",
+    "preventedMatchId": 1,
+    "takerOrderId": 5,
+    "makerOrderId": 3,
+    "tradeGroupId": 1,
+    "selfTradePreventionMode": "EXPIRE_MAKER",
+    "price": "1.100000",
+    "makerPreventedQuantity": "1.300000",
+    "transactTime": 1669101687094
+  }
+]
+```
+
+
 ## User data stream endpoints
 Specifics on how user data streams work can be found [here.](https://github.com/binance/binance-spot-api-docs/blob/master/user-data-stream.md)
 
@@ -1940,7 +2806,7 @@ Start a new user data stream. The stream will close after 60 minutes unless a ke
 **Parameters:**
 NONE
 
-**Data Source:** 
+**Data Source:**
 Memory
 
 **Response:**
@@ -1994,204 +2860,4 @@ Memory
 **Response:**
 ```javascript
 {}
-```
-
-# Filters
-Filters define trading rules on a symbol or an exchange.
-Filters come in two forms: `symbol filters` and `exchange filters`.
-
-## Symbol filters
-### PRICE_FILTER
-The `PRICE_FILTER` defines the `price` rules for a symbol. There are 3 parts:
-
-* `minPrice` defines the minimum `price`/`stopPrice` allowed; disabled on `minPrice` == 0.
-* `maxPrice` defines the maximum `price`/`stopPrice` allowed; disabled on `maxPrice` == 0.
-* `tickSize` defines the intervals that a `price`/`stopPrice` can be increased/decreased by; disabled on `tickSize` == 0.
-
-Any of the above variables can be set to 0, which disables that rule in the `price filter`. In order to pass the `price filter`, the following must be true for `price`/`stopPrice` of the enabled rules:
-
-* `price` >= `minPrice`
-* `price` <= `maxPrice`
-* (`price`-`minPrice`) % `tickSize` == 0
-
-**/exchangeInfo format:**
-```javascript
-{
-  "filterType": "PRICE_FILTER",
-  "minPrice": "0.00000100",
-  "maxPrice": "100000.00000000",
-  "tickSize": "0.00000100"
-}
-```
-
-### PERCENT_PRICE
-The `PERCENT_PRICE` filter defines valid range for a price based on the average of the previous trades.
-`avgPriceMins` is the number of minutes the average price is calculated over. 0 means the last price is used.
-
-In order to pass the `percent price`, the following must be true for `price`:
-* `price` <= `weightedAveragePrice` * `multiplierUp`
-* `price` >= `weightedAveragePrice` * `multiplierDown`
-
-**/exchangeInfo format:**
-```javascript
-{
-  "filterType": "PERCENT_PRICE",
-  "multiplierUp": "1.3000",
-  "multiplierDown": "0.7000",
-  "avgPriceMins": 5
-}
-```
-
-### LOT_SIZE
-The `LOT_SIZE` filter defines the `quantity` (aka "lots" in auction terms) rules for a symbol. There are 3 parts:
-
-* `minQty` defines the minimum `quantity`/`icebergQty` allowed.
-* `maxQty` defines the maximum `quantity`/`icebergQty` allowed.
-* `stepSize` defines the intervals that a `quantity`/`icebergQty` can be increased/decreased by.
-
-In order to pass the `lot size`, the following must be true for `quantity`/`icebergQty`:
-
-* `quantity` >= `minQty`
-* `quantity` <= `maxQty`
-* (`quantity`-`minQty`) % `stepSize` == 0
-
-**/exchangeInfo format:**
-```javascript
-{
-  "filterType": "LOT_SIZE",
-  "minQty": "0.00100000",
-  "maxQty": "100000.00000000",
-  "stepSize": "0.00100000"
-}
-```
-
-### MIN_NOTIONAL
-The `MIN_NOTIONAL` filter defines the minimum notional value allowed for an order on a symbol.
-An order's notional value is the `price` * `quantity`.
-`applyToMarket` determines whether or not the `MIN_NOTIONAL` filter will also be applied to `MARKET` orders.
-Since `MARKET` orders have no price, the average price is used over the last `avgPriceMins` minutes.
-`avgPriceMins` is the number of minutes the average price is calculated over. 0 means the last price is used.
-
-
-**/exchangeInfo format:**
-```javascript
-{
-  "filterType": "MIN_NOTIONAL",
-  "minNotional": "0.00100000",
-  "applyToMarket": true,
-  "avgPriceMins": 5
-}
-```
-
-### ICEBERG_PARTS
-The `ICEBERG_PARTS` filter defines the maximum parts an iceberg order can have. The number of `ICEBERG_PARTS` is defined as `CEIL(qty / icebergQty)`.
-
-**/exchangeInfo format:**
-```javascript
-{
-  "filterType": "ICEBERG_PARTS",
-  "limit": 10
-}
-```
-
-### MARKET_LOT_SIZE
-The `MARKET_LOT_SIZE` filter defines the `quantity` (aka "lots" in auction terms) rules for `MARKET` orders on a symbol. There are 3 parts:
-
-* `minQty` defines the minimum `quantity` allowed.
-* `maxQty` defines the maximum `quantity` allowed.
-* `stepSize` defines the intervals that a `quantity` can be increased/decreased by.
-
-In order to pass the `market lot size`, the following must be true for `quantity`:
-
-* `quantity` >= `minQty`
-* `quantity` <= `maxQty`
-* (`quantity`-`minQty`) % `stepSize` == 0
-
-**/exchangeInfo format:**
-```javascript
-{
-  "filterType": "MARKET_LOT_SIZE",
-  "minQty": "0.00100000",
-  "maxQty": "100000.00000000",
-  "stepSize": "0.00100000"
-}
-```
-
-### MAX_NUM_ORDERS
-The `MAX_NUM_ORDERS` filter defines the maximum number of orders an account is allowed to have open on a symbol.
-Note that both "algo" orders and normal orders are counted for this filter.
-
-**/exchangeInfo format:**
-```javascript
-{
-  "filterType": "MAX_NUM_ORDERS",
-  "maxNumOrders": 25
-}
-```
-
-### MAX_NUM_ALGO_ORDERS
-The `MAX_NUM_ALGO_ORDERS` filter defines the maximum number of "algo" orders an account is allowed to have open on a symbol.
-"Algo" orders are `STOP_LOSS`, `STOP_LOSS_LIMIT`, `TAKE_PROFIT`, and `TAKE_PROFIT_LIMIT` orders.
-
-**/exchangeInfo format:**
-```javascript
-{
-  "filterType": "MAX_NUM_ALGO_ORDERS",
-  "maxNumAlgoOrders": 5
-}
-```
-
-### MAX_NUM_ICEBERG_ORDERS
-The `MAX_NUM_ICEBERG_ORDERS` filter defines the maximum number of `ICEBERG` orders an account is allowed to have open on a symbol.
-An `ICEBERG` order is any order where the `icebergQty` is > 0.
-
-**/exchangeInfo format:**
-```javascript
-{
-  "filterType": "MAX_NUM_ICEBERG_ORDERS",
-  "maxNumIcebergOrders": 5
-}
-```
-
-### MAX_POSITION 
-
-The `MAX_POSITION` filter defines the allowed maximum position an account can have on the base asset of a symbol. An account's position defined as the sum of the account's:
-1. free balance of the base asset
-1. locked balance of the base asset
-1. sum of the qty of all open BUY orders
-
-`BUY` orders will be rejected if the account's position is greater than the maximum position allowed.
-
-**/exchangeInfo format:**
-```javascript
-{
-  "filterType":"MAX_POSITION",
-  "maxPosition":"10.00000000"
-}
-```
-
-
-## Exchange Filters
-### EXCHANGE_MAX_NUM_ORDERS
-The `EXCHANGE_MAX_NUM_ORDERS` filter defines the maximum number of orders an account is allowed to have open on the exchange.
-Note that both "algo" orders and normal orders are counted for this filter.
-
-**/exchangeInfo format:**
-```javascript
-{
-  "filterType": "EXCHANGE_MAX_NUM_ORDERS",
-  "maxNumOrders": 1000
-}
-```
-
-### EXCHANGE_MAX_NUM_ALGO_ORDERS
-The `EXCHANGE_MAX_NUM_ALGO_ORDERS` filter defines the maximum number of "algo" orders an account is allowed to have open on the exchange.
-"Algo" orders are `STOP_LOSS`, `STOP_LOSS_LIMIT`, `TAKE_PROFIT`, and `TAKE_PROFIT_LIMIT` orders.
-
-**/exchangeInfo format:**
-```javascript
-{
-  "filterType": "EXCHANGE_MAX_NUM_ALGO_ORDERS",
-  "maxNumAlgoOrders": 200
-}
 ```

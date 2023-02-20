@@ -4,17 +4,18 @@
 
 - [General WSS information](#general-wss-information)
 - [API Endpoints](#api-endpoints)
-  - [Create a listenKey](#create-a-listenkey)
-  - [Ping/Keep-alive a listenKey](#pingkeep-alive-a-listenkey)
-  - [Close a listenKey](#close-a-listenkey)
+  - [Create a listenKey (USER_STREAM)](#create-a-listenkey-user_stream)
+  - [Ping/Keep-alive a listenKey (USER_STREAM)](#pingkeep-alive-a-listenkey-user_stream)
+  - [Close a listenKey (USER_STREAM)](#close-a-listenkey-user_stream)
 - [Web Socket Payloads](#web-socket-payloads)
   - [Account Update](#account-update)
   - [Balance Update](#balance-update)
   - [Order Update](#order-update)
+    - [Execution types](#execution-types)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
-# User Data Streams for Binance (2021-01-01)
+# User Data Streams for Binance (2023-01-18)
 # General WSS information
 * The base API endpoint is: **https://api.binance.com**
 * A User Data Stream `listenKey` is valid for 60 minutes after creation.
@@ -26,7 +27,7 @@
 * A single connection to **stream.binance.com** is only valid for 24 hours; expect to be disconnected at the 24 hour mark
 
 # API Endpoints
-## Create a listenKey
+## Create a listenKey (USER_STREAM)
 ```
 POST /api/v3/userDataStream
 ```
@@ -45,7 +46,7 @@ NONE
 }
 ```
 
-## Ping/Keep-alive a listenKey
+## Ping/Keep-alive a listenKey (USER_STREAM)
 ```
 PUT /api/v3/userDataStream
 ```
@@ -65,7 +66,7 @@ listenKey | STRING | YES
 {}
 ```
 
-## Close a listenKey
+## Close a listenKey (USER_STREAM)
 ```
 DELETE /api/v3/userDataStream
 ```
@@ -125,10 +126,6 @@ Balance Update occurs during the following:
 ## Order Update
 Orders are updated with the `executionReport` event.
 
-Check the [Rest API Documentation](./rest-api.md#enum-definitions) and below for relevant enum definitions.
-
-Average price can be found by doing `Z` divided by `z`.
-
 **Payload:**
 ```javascript
 {
@@ -142,9 +139,10 @@ Average price can be found by doing `Z` divided by `z`.
   "q": "1.00000000",             // Order quantity
   "p": "0.10264410",             // Order price
   "P": "0.00000000",             // Stop price
+  "d": 4,                        // Trailing Delta; This is only visible if the order was a trailing stop order.
   "F": "0.00000000",             // Iceberg quantity
   "g": -1,                       // OrderListId
-  "C": null,                     // Original client order ID; This is the ID of the order being canceled
+  "C": "",                       // Original client order ID; This is the ID of the order being canceled
   "x": "NEW",                    // Current execution type
   "X": "NEW",                    // Current order status
   "r": "NONE",                   // Order reject reason; will be an error code.
@@ -156,25 +154,28 @@ Average price can be found by doing `Z` divided by `z`.
   "N": null,                     // Commission asset
   "T": 1499405658657,            // Transaction time
   "t": -1,                       // Trade ID
+  "v": 3,                        // Prevented Match Id; This is only visible if the order expire due to STP trigger
   "I": 8641984,                  // Ignore
   "w": true,                     // Is the order on the book?
   "m": false,                    // Is this trade the maker side?
   "M": false,                    // Ignore
   "O": 1499405658657,            // Order creation time
   "Z": "0.00000000",             // Cumulative quote asset transacted quantity
-  "Y": "0.00000000",              // Last quote asset transacted quantity (i.e. lastPrice * lastQty)
-  "Q": "0.00000000"              // Quote Order Qty
+  "Y": "0.00000000",             // Last quote asset transacted quantity (i.e. lastPrice * lastQty)
+  "Q": "0.00000000",             // Quote Order Quantity
+  "D": 1668680518494,            // Trailing Time; This is only visible if the trailing stop order has been activated.
+  "j": 1,                        // Strategy ID; This is only visible if the strategyId parameter was provided upon order placement
+  "J": 1000000,                  // Strategy Type; This is only visible if the strategyType parameter was provided upon order placement
+  "W": 1499405658657,            // Working Time; This is only visible if the order has been placed on the book.
+  "V": "NONE"                    // SelfTradePreventionMode
+  "u":1,                         // TradeGroupId; This is only visible if the account is part of a trade group and the order expired due to STP trigger.
+  "U":37,                        // CounterOrderId; This is only visible if the order expired due to STP trigger.
+  "A":"3.000000",                // Prevented Quantity; This is only visible if the order expired due to STP trigger.
+  "B":"3.000000"                 // Last Prevented Quantity; This is only visible if the order expired due to STP trigger.
 }
 ```
 
-**Execution types:**
-
-* NEW - The order has been accepted into the engine.
-* CANCELED - The order has been canceled by the user. 
-* REPLACED (currently unused)
-* REJECTED - The order has been rejected and was not processed. (This is never pushed into the User Data Stream)
-* TRADE - Part of the order or all of the order's quantity has filled.
-* EXPIRED - The order was canceled according to the order type's rules (e.g. LIMIT FOK orders with no fill, LIMIT IOC or MARKET orders that partially fill) or by the exchange, (e.g. orders canceled during liquidation, orders canceled during maintenance)
+**Note:** Average price can be found by doing `Z` divided by `z`.
 
 If the order is an OCO, an event will be displayed named `ListStatus` in addition to the `executionReport` event.
 
@@ -205,3 +206,15 @@ If the order is an OCO, an event will be displayed named `ListStatus` in additio
   ]
 }
 ```
+
+### Execution types
+
+* `NEW` - The order has been accepted into the engine.
+* `CANCELED` - The order has been canceled by the user. 
+* `REPLACED` (currently unused)
+* `REJECTED` - The order has been rejected and was not processed (This message appears only with Cancel Replace Orders wherein the new order placement is rejected but the request to cancel request succeeds.)
+* `TRADE` - Part of the order or all of the order's quantity has filled.
+* `EXPIRED` - The order was canceled according to the order type's rules (e.g. LIMIT FOK orders with no fill, LIMIT IOC or MARKET orders that partially fill) or by the exchange, (e.g. orders canceled during liquidation, orders canceled during maintenance).
+* `TRADE_PREVENTION` - The order has expired due to STP trigger.
+
+Check the [Rest API Documentation](./rest-api.md#enum-definitions) for more relevant enum definitions.

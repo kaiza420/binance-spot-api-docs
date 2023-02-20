@@ -1,4 +1,4 @@
-# 错误代码汇总 (2018-11-13)
+# 错误代码汇总 (2022-12-13)
 币安Rest接口(包括wapi)返回的错误包含两部分，错误码与错误信息. 错误码是大类，一个错误码可能对应多个不同的错误信息。
 以下是一个完整错误码实例
 ```javascript
@@ -20,13 +20,18 @@
  * 请检查你的(API)权限
 
 #### -1003 请求过多
- * 请求过于频繁超过限制。如果导致了IP地址被封禁，错误消息中会给出解封时间。解决这类问题建议减少rest接口轮询，多采用websocket接收事务消息推送。
+ * 排队的请求过多。
+ * 请求权重过多； 当前限制是 %s 每 %s 的请求权重。 请使用 Websocket Streams 进行实时更新，以避免轮询API。
+ * 请求权重过多； IP被禁止，直到％s。 请使用 Websocket Streams 进行实时更新，以免被禁。
 
 #### -1006 非常规响应
  * （从内部）接收到了不符合预设格式的消息，下单状态未知。
 
 #### -1007 超时
  * 后端服务超时，下单状态未知。
+
+### -1008 SERVER_BUSY
+  * 现货交易服务器当前因其他请求而过载。 请在几分钟后重试。
 
 #### -1014 不支持的订单参数(组合)
  * 不支持的订单参数组合. 
@@ -78,6 +83,9 @@
  * A parameter was sent when not required.
  * Parameter '%s' sent when not required.
 
+#### -1108 参数溢出
+ * Parameter '%s' overflowed.
+
 #### -1111 精度过高
  * Precision is over the maximum defined for this asset.
 
@@ -122,6 +130,13 @@
  * Invalid data sent for a parameter.
  * Data sent for parameter '%s' is not valid.
 
+#### -1134 strategyType不符合需求
+ * `strategyType` was less than 1000000. 
+
+#### -1135 无效的JSON
+ * Invalid JSON Request
+ * JSON sent for parameter '%s' is not valid
+
 #### -2010 订单被拒绝
  * NEW_ORDER_REJECTED
 
@@ -157,13 +172,27 @@
 "Take profit limit orders are not supported for this symbol." | 该交易对无法发起止盈限价单
 "Price * QTY is zero or less." | 订单金额必须大于0
 "IcebergQty exceeds QTY." |冰山订单中小订单的Quantity必须小于总的Quantity
-"This action disabled is on this account." | 账户被封禁，联系客服
+"This action is disabled on this account." | 联系客户支持； 该帐户已禁用了某些操作。
 "Unsupported order combination" | `orderType`, `timeInForce`, `stopPrice`, `icebergQty` 某些参数取某些值的时候另一些参数必须/不得提供。
 "Order would trigger immediately." | 止盈、止损单必须在未来触发，如果条件太弱现在的市场行情就可以触发（通常是误操作填错了条件），就会报这个错误。
 "Cancel order is invalid. Check origClOrdId and orderId." | 撤销订单必须提供`origClOrdId`或者`orderId`中的一个。 
 "Order would immediately match and take." | `LIMIT_MAKER` 订单如果按照规则会成为Taker，就会报此错。
+"The relationship of the prices for the orders is not correct." | `OCO`订单中设置的价格不符合报价规则：<br/> The rules are: <br/> `SELL Orders`: Limit Price > Last Price > Stop Price <br/>`BUY Orders`: Limit Price < Last Price < Stop Price
+"OCO orders are not supported for this symbol" | `OCO`订单不支持该交易对
+"Quote order qty market orders are not support for this symbol."| 这个交易对，市价单不支持参数`quoteOrderQty`
+"Trailing stop orders are not supported for this symbol."         | 此symbol不支持 `trailingDelta`
+"Order cancel-replace is not supported for this symbol."          | 此symbol不支持 `POST /api/v3/order/cancelReplace` 
 
-## -9xxx 订单未能通过过滤器
+## 关于 POST /api/v3/order/cancelReplace 的错误
+
+### -2021 Order cancel-replace partially failed
+收到该错误码代表撤单**或者**下单失败。
+
+### -2022 Order cancel-replace failed.
+收到该错误码代表撤单**和**下单都失败。
+
+
+## 订单未能通过过滤器
 错误信息 | 描述
 ------------ | ------------
 "Filter failure: PRICE_FILTER" | 检查价格的上限、下限、步进间隔。
